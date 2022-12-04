@@ -1,0 +1,1096 @@
+<html>
+
+<head>
+<script>window.onerror = function(error, url, line) {parent.postMessage(["console", "❌ -- [ERROR] -- ❌ -- ⚠️ " + error], "*")};var cl = console.log;console.log = function () {var msg = [...arguments].join();parent.postMessage(["console", msg], "*");  }  </script><script>window.onerror = function(error, url, line) {parent.postMessage(["console", "❌ -- [ERROR] -- ❌ -- ⚠️ " + error], "*")};var cl = console.log;console.log = function () {var msg = [...arguments].join();parent.postMessage(["console", msg], "*");  } 
+</script><script src = "https://mimicproject.com/libs/maximilian.js">
+</script>
+  <script crossorigin src = "https://cdnjs.cloudflare.com/ajax/libs/three.js/109/three.min.js">
+</script> 
+<script crossorigin src="https://threejs.org/examples/js/loaders/GLTFLoader.js">
+</script>
+<script src = "https://mimicproject.com/libs/maximilian.js">
+</script>
+  <script language="javascript" type="text/javascript">
+
+// This set of controls performs orbiting, dollying (zooming), and panning. It maintains
+// the "up" direction as +Y, unlike the TrackballControls. Touch on tablet and phones is
+// supported.
+//
+//    Orbit - left mouse / touch: one finger move
+//    Zoom - middle mouse, or mousewheel / touch: two finger spread or squish
+//    Pan - right mouse, or arrow keys / touch: three finter swipe
+//
+// This is a drop-in replacement for (most) TrackballControls used in examples.
+// That is, include this js file and wherever you see:
+//    	controls = new THREE.TrackballControls( camera );
+//      controls.target.z = 150;
+// Simple substitute "OrbitControls" and the control should work as-is.
+
+THREE.OrbitControls = function ( object, domElement, localElement ) {
+
+	this.object = object;
+	this.domElement = ( domElement !== undefined ) ? domElement : document;
+	this.localElement = ( localElement !== undefined ) ? localElement : document;
+
+	// API
+
+	// Set to false to disable this control
+	this.enabled = true;
+
+	// "target" sets the location of focus, where the control orbits around
+	// and where it pans with respect to.
+	this.target = new THREE.Vector3();
+	// center is old, deprecated; use "target" instead
+	this.center = this.target;
+
+	// This option actually enables dollying in and out; left as "zoom" for
+	// backwards compatibility
+	this.noZoom = false;
+	this.zoomSpeed = 1.0;
+	// Limits to how far you can dolly in and out
+	this.minDistance = 0;
+	this.maxDistance = Infinity;
+
+	// Set to true to disable this control
+	this.noRotate = false;
+	this.rotateSpeed = 1.0;
+
+	// Set to true to disable this control
+	this.noPan = false;
+	this.keyPanSpeed = 7.0;	// pixels moved per arrow key push
+
+	// Set to true to automatically rotate around the target
+	this.autoRotate = false;
+	this.autoRotateSpeed = 2.0; // 30 seconds per round when fps is 60
+
+	// How far you can orbit vertically, upper and lower limits.
+	// Range is 0 to Math.PI radians.
+	this.minPolarAngle = 0; // radians
+	this.maxPolarAngle = Math.PI; // radians
+
+	// Set to true to disable use of the keys
+	this.noKeys = false;
+	// The four arrow keys
+	this.keys = { LEFT: 37, UP: 38, RIGHT: 39, BOTTOM: 40 };
+
+	////////////
+	// internals
+
+	var scope = this;
+
+	var EPS = 0.000001;
+
+	var rotateStart = new THREE.Vector2();
+	var rotateEnd = new THREE.Vector2();
+	var rotateDelta = new THREE.Vector2();
+
+	var panStart = new THREE.Vector2();
+	var panEnd = new THREE.Vector2();
+	var panDelta = new THREE.Vector2();
+
+	var dollyStart = new THREE.Vector2();
+	var dollyEnd = new THREE.Vector2();
+	var dollyDelta = new THREE.Vector2();
+
+	var phiDelta = 0;
+	var thetaDelta = 0;
+	var scale = 1;
+	var pan = new THREE.Vector3();
+
+	var lastPosition = new THREE.Vector3();
+
+	var STATE = { NONE : -1, ROTATE : 0, DOLLY : 1, PAN : 2, TOUCH_ROTATE : 3, TOUCH_DOLLY : 4, TOUCH_PAN : 5 };
+	var state = STATE.NONE;
+
+	// events
+
+	var changeEvent = { type: 'change' };
+
+
+	this.rotateLeft = function ( angle ) {
+
+		if ( angle === undefined ) {
+
+			angle = getAutoRotationAngle();
+
+		}
+
+		thetaDelta -= angle;
+
+	};
+
+	this.rotateUp = function ( angle ) {
+
+		if ( angle === undefined ) {
+
+			angle = getAutoRotationAngle();
+
+		}
+
+		phiDelta -= angle;
+
+	};
+
+	// pass in distance in world space to move left
+	this.panLeft = function ( distance ) {
+
+		var panOffset = new THREE.Vector3();
+		var te = this.object.matrix.elements;
+		// get X column of matrix
+		panOffset.set( te[0], te[1], te[2] );
+		panOffset.multiplyScalar(-distance);
+		
+		pan.add( panOffset );
+
+	};
+
+	// pass in distance in world space to move up
+	this.panUp = function ( distance ) {
+
+		var panOffset = new THREE.Vector3();
+		var te = this.object.matrix.elements;
+		// get Y column of matrix
+		panOffset.set( te[4], te[5], te[6] );
+		panOffset.multiplyScalar(distance);
+		
+		pan.add( panOffset );
+	};
+	
+	// main entry point; pass in Vector2 of change desired in pixel space,
+	// right and down are positive
+	this.pan = function ( delta ) {
+
+		var element = scope.domElement === document ? scope.domElement.body : scope.domElement;
+
+		if ( scope.object.fov !== undefined ) {
+
+			// perspective
+			var position = scope.object.position;
+			var offset = position.clone().sub( scope.target );
+			var targetDistance = offset.length();
+
+			// half of the fov is center to top of screen
+			targetDistance *= Math.tan( (scope.object.fov/2) * Math.PI / 180.0 );
+			// we actually don't use screenWidth, since perspective camera is fixed to screen height
+			scope.panLeft( 2 * delta.x * targetDistance / element.clientHeight );
+			scope.panUp( 2 * delta.y * targetDistance / element.clientHeight );
+
+		} else if ( scope.object.top !== undefined ) {
+
+			// orthographic
+			scope.panLeft( delta.x * (scope.object.right - scope.object.left) / element.clientWidth );
+			scope.panUp( delta.y * (scope.object.top - scope.object.bottom) / element.clientHeight );
+
+		} else {
+
+			// camera neither orthographic or perspective - warn user
+			console.warn( 'WARNING: OrbitControls.js encountered an unknown camera type - pan disabled.' );
+parent.postMessage(["console",JSON.stringify('WARNING: OrbitControls.js encountered an unknown camera type - pan disabled.')], "*");
+
+		}
+
+	};
+
+	this.dollyIn = function ( dollyScale ) {
+
+		if ( dollyScale === undefined ) {
+
+			dollyScale = getZoomScale();
+
+		}
+
+		scale /= dollyScale;
+
+	};
+
+	this.dollyOut = function ( dollyScale ) {
+
+		if ( dollyScale === undefined ) {
+
+			dollyScale = getZoomScale();
+
+		}
+
+		scale *= dollyScale;
+
+	};
+
+	this.update = function () {
+
+		var position = this.object.position;
+		var offset = position.clone().sub( this.target );
+
+		// angle from z-axis around y-axis
+
+		var theta = Math.atan2( offset.x, offset.z );
+
+		// angle from y-axis
+
+		var phi = Math.atan2( Math.sqrt( offset.x * offset.x + offset.z * offset.z ), offset.y );
+
+		if ( this.autoRotate ) {
+
+			this.rotateLeft( getAutoRotationAngle() );
+
+		}
+
+		theta += thetaDelta;
+		phi += phiDelta;
+
+		// restrict phi to be between desired limits
+		phi = Math.max( this.minPolarAngle, Math.min( this.maxPolarAngle, phi ) );
+
+		// restrict phi to be betwee EPS and PI-EPS
+		phi = Math.max( EPS, Math.min( Math.PI - EPS, phi ) );
+
+		var radius = offset.length() * scale;
+
+		// restrict radius to be between desired limits
+		radius = Math.max( this.minDistance, Math.min( this.maxDistance, radius ) );
+		
+		// move target to panned location
+		this.target.add( pan );
+
+		offset.x = radius * Math.sin( phi ) * Math.sin( theta );
+		offset.y = radius * Math.cos( phi );
+		offset.z = radius * Math.sin( phi ) * Math.cos( theta );
+
+		position.copy( this.target ).add( offset );
+
+		this.object.lookAt( this.target );
+
+		thetaDelta = 0;
+		phiDelta = 0;
+		scale = 1;
+		pan.set(0,0,0);
+
+		if ( lastPosition.distanceTo( this.object.position ) > 0 ) {
+
+			this.dispatchEvent( changeEvent );
+
+			lastPosition.copy( this.object.position );
+
+		}
+
+	};
+
+
+	function getAutoRotationAngle() {
+
+		return 2 * Math.PI / 60 / 60 * scope.autoRotateSpeed;
+
+	}
+
+	function getZoomScale() {
+
+		return Math.pow( 0.95, scope.zoomSpeed );
+
+	}
+
+	function onMouseDown( event ) {
+
+		if ( scope.enabled === false ) { return; }
+		event.preventDefault();
+
+		if ( event.button === 0 ) {
+			if ( scope.noRotate === true ) { return; }
+
+			state = STATE.ROTATE;
+
+			rotateStart.set( event.clientX, event.clientY );
+
+		} else if ( event.button === 1 ) {
+			if ( scope.noZoom === true ) { return; }
+
+			state = STATE.DOLLY;
+
+			dollyStart.set( event.clientX, event.clientY );
+
+		} else if ( event.button === 2 ) {
+			if ( scope.noPan === true ) { return; }
+
+			state = STATE.PAN;
+
+			panStart.set( event.clientX, event.clientY );
+
+		}
+
+		// Greggman fix: https://github.com/greggman/three.js/commit/fde9f9917d6d8381f06bf22cdff766029d1761be
+		scope.domElement.addEventListener( 'mousemove', onMouseMove, false );
+		scope.domElement.addEventListener( 'mouseup', onMouseUp, false );
+
+	}
+
+	function onMouseMove( event ) {
+
+		if ( scope.enabled === false ) return;
+
+		event.preventDefault();
+
+		var element = scope.domElement === document ? scope.domElement.body : scope.domElement;
+
+		if ( state === STATE.ROTATE ) {
+
+			if ( scope.noRotate === true ) return;
+
+			rotateEnd.set( event.clientX, event.clientY );
+			rotateDelta.subVectors( rotateEnd, rotateStart );
+
+			// rotating across whole screen goes 360 degrees around
+			scope.rotateLeft( 2 * Math.PI * rotateDelta.x / element.clientWidth * scope.rotateSpeed );
+			// rotating up and down along whole screen attempts to go 360, but limited to 180
+			scope.rotateUp( 2 * Math.PI * rotateDelta.y / element.clientHeight * scope.rotateSpeed );
+
+			rotateStart.copy( rotateEnd );
+
+		} else if ( state === STATE.DOLLY ) {
+
+			if ( scope.noZoom === true ) return;
+
+			dollyEnd.set( event.clientX, event.clientY );
+			dollyDelta.subVectors( dollyEnd, dollyStart );
+
+			if ( dollyDelta.y > 0 ) {
+
+				scope.dollyIn();
+
+			} else {
+
+				scope.dollyOut();
+
+			}
+
+			dollyStart.copy( dollyEnd );
+
+		} else if ( state === STATE.PAN ) {
+
+			if ( scope.noPan === true ) return;
+
+			panEnd.set( event.clientX, event.clientY );
+			panDelta.subVectors( panEnd, panStart );
+			
+			scope.pan( panDelta );
+
+			panStart.copy( panEnd );
+
+		}
+
+		// Greggman fix: https://github.com/greggman/three.js/commit/fde9f9917d6d8381f06bf22cdff766029d1761be
+		scope.update();
+
+	}
+
+	function onMouseUp( /* event */ ) {
+
+		if ( scope.enabled === false ) return;
+
+		// Greggman fix: https://github.com/greggman/three.js/commit/fde9f9917d6d8381f06bf22cdff766029d1761be
+		scope.domElement.removeEventListener( 'mousemove', onMouseMove, false );
+		scope.domElement.removeEventListener( 'mouseup', onMouseUp, false );
+
+		state = STATE.NONE;
+
+	}
+
+	function onMouseWheel( event ) {
+
+		if ( scope.enabled === false || scope.noZoom === true ) return;
+
+		var delta = 0;
+
+		if ( event.wheelDelta ) { // WebKit / Opera / Explorer 9
+
+			delta = event.wheelDelta;
+
+		} else if ( event.detail ) { // Firefox
+
+			delta = - event.detail;
+
+		}
+
+		if ( delta > 0 ) {
+
+			scope.dollyOut();
+
+		} else {
+
+			scope.dollyIn();
+
+		}
+
+	}
+
+	function onKeyDown( event ) {
+
+		if ( scope.enabled === false ) { return; }
+		if ( scope.noKeys === true ) { return; }
+		if ( scope.noPan === true ) { return; }
+
+		// pan a pixel - I guess for precise positioning?
+		// Greggman fix: https://github.com/greggman/three.js/commit/fde9f9917d6d8381f06bf22cdff766029d1761be
+		var needUpdate = false;
+		
+		switch ( event.keyCode ) {
+
+			case scope.keys.UP:
+				scope.pan( new THREE.Vector2( 0, scope.keyPanSpeed ) );
+				needUpdate = true;
+				break;
+			case scope.keys.BOTTOM:
+				scope.pan( new THREE.Vector2( 0, -scope.keyPanSpeed ) );
+				needUpdate = true;
+				break;
+			case scope.keys.LEFT:
+				scope.pan( new THREE.Vector2( scope.keyPanSpeed, 0 ) );
+				needUpdate = true;
+				break;
+			case scope.keys.RIGHT:
+				scope.pan( new THREE.Vector2( -scope.keyPanSpeed, 0 ) );
+				needUpdate = true;
+				break;
+		}
+
+		// Greggman fix: https://github.com/greggman/three.js/commit/fde9f9917d6d8381f06bf22cdff766029d1761be
+		if ( needUpdate ) {
+
+			scope.update();
+
+		}
+
+	}
+	
+	function touchstart( event ) {
+
+		if ( scope.enabled === false ) { return; }
+
+		switch ( event.touches.length ) {
+
+			case 1:	// one-fingered touch: rotate
+				if ( scope.noRotate === true ) { return; }
+
+				state = STATE.TOUCH_ROTATE;
+
+				rotateStart.set( event.touches[ 0 ].pageX, event.touches[ 0 ].pageY );
+				break;
+
+			case 2:	// two-fingered touch: dolly
+				if ( scope.noZoom === true ) { return; }
+
+				state = STATE.TOUCH_DOLLY;
+
+				var dx = event.touches[ 0 ].pageX - event.touches[ 1 ].pageX;
+				var dy = event.touches[ 0 ].pageY - event.touches[ 1 ].pageY;
+				var distance = Math.sqrt( dx * dx + dy * dy );
+				dollyStart.set( 0, distance );
+				break;
+
+			case 3: // three-fingered touch: pan
+				if ( scope.noPan === true ) { return; }
+
+				state = STATE.TOUCH_PAN;
+
+				panStart.set( event.touches[ 0 ].pageX, event.touches[ 0 ].pageY );
+				break;
+
+			default:
+				state = STATE.NONE;
+
+		}
+	}
+
+	function touchmove( event ) {
+
+		if ( scope.enabled === false ) { return; }
+
+		event.preventDefault();
+		event.stopPropagation();
+
+		var element = scope.domElement === document ? scope.domElement.body : scope.domElement;
+
+		switch ( event.touches.length ) {
+
+			case 1: // one-fingered touch: rotate
+				if ( scope.noRotate === true ) { return; }
+				if ( state !== STATE.TOUCH_ROTATE ) { return; }
+
+				rotateEnd.set( event.touches[ 0 ].pageX, event.touches[ 0 ].pageY );
+				rotateDelta.subVectors( rotateEnd, rotateStart );
+
+				// rotating across whole screen goes 360 degrees around
+				scope.rotateLeft( 2 * Math.PI * rotateDelta.x / element.clientWidth * scope.rotateSpeed );
+				// rotating up and down along whole screen attempts to go 360, but limited to 180
+				scope.rotateUp( 2 * Math.PI * rotateDelta.y / element.clientHeight * scope.rotateSpeed );
+
+				rotateStart.copy( rotateEnd );
+				break;
+
+			case 2: // two-fingered touch: dolly
+				if ( scope.noZoom === true ) { return; }
+				if ( state !== STATE.TOUCH_DOLLY ) { return; }
+
+				var dx = event.touches[ 0 ].pageX - event.touches[ 1 ].pageX;
+				var dy = event.touches[ 0 ].pageY - event.touches[ 1 ].pageY;
+				var distance = Math.sqrt( dx * dx + dy * dy );
+
+				dollyEnd.set( 0, distance );
+				dollyDelta.subVectors( dollyEnd, dollyStart );
+
+				if ( dollyDelta.y > 0 ) {
+
+					scope.dollyOut();
+
+				} else {
+
+					scope.dollyIn();
+
+				}
+
+				dollyStart.copy( dollyEnd );
+				break;
+
+			case 3: // three-fingered touch: pan
+				if ( scope.noPan === true ) { return; }
+				if ( state !== STATE.TOUCH_PAN ) { return; }
+
+				panEnd.set( event.touches[ 0 ].pageX, event.touches[ 0 ].pageY );
+				panDelta.subVectors( panEnd, panStart );
+				
+				scope.pan( panDelta );
+
+				panStart.copy( panEnd );
+				break;
+
+			default:
+				state = STATE.NONE;
+
+		}
+
+	}
+
+	function touchend( /* event */ ) {
+
+		if ( scope.enabled === false ) { return; }
+
+		state = STATE.NONE;
+	}
+
+	this.domElement.addEventListener( 'contextmenu', function ( event ) { event.preventDefault(); }, false );
+	this.localElement.addEventListener( 'mousedown', onMouseDown, false );
+	this.domElement.addEventListener( 'mousewheel', onMouseWheel, false );
+	this.domElement.addEventListener( 'DOMMouseScroll', onMouseWheel, false ); // firefox
+
+	this.domElement.addEventListener( 'keydown', onKeyDown, false );
+
+	this.localElement.addEventListener( 'touchstart', touchstart, false );
+	this.domElement.addEventListener( 'touchend', touchend, false );
+	this.domElement.addEventListener( 'touchmove', touchmove, false );
+
+};
+
+THREE.OrbitControls.prototype = Object.create( THREE.EventDispatcher.prototype );
+</script>
+  <style type = "text/css" >
+body {
+			height: 100%;
+  			margin: 0px;
+  			padding:0px;
+			background-color: #000000;
+			overflow: hidden;
+		}
+
+h1 {
+  font-family: Garamond, serif;
+  color: #c9cafc;
+}
+
+h3 {
+  
+  font: 1.2em "Constantia";
+  font-weight: bold;
+  text-align: center;
+  color: #b298dc;
+}
+
+p {
+  font: 0.7em "Constantia";
+  font-weight: 100;
+  text-align: center;
+  color: #fbfaff;
+}
+
+#canvas {
+  			width: 100%;
+  			height: 100%;
+  			display: block;
+}
+</style>
+	<meta charset="utf-8">
+<h3 id="subtitle">⋆ ⁺ ₊ ⋆ ♡ The Stellar Wild ☾ ⋆ ⁺ ₊ ⋆</h3>
+<p id="p">I believe this is not a dream. The transparent planets are soap bubbles of the stellar spectrum. The melody of movement and stillness writes the rhapsody of the universe.</p>
+  <style>
+  
+canvas {
+position: absolute;
+display: block;
+width:100%;
+height: 100%;
+top:70;
+bottom:0;
+left:0;
+right:0;
+background:transparent;
+}
+</style>
+</head>
+
+<body>
+<canvas>
+</canvas>
+   
+<script>
+
+var canvas = document.querySelector("canvas");
+var width = window.innerWidth;
+var height = window.innerHeight;
+var context = canvas.getContext("2d");
+
+canvas.setAttribute("width", width);
+canvas.setAttribute("height", height);
+canvas.addEventListener('mousemove',getMouse,false);
+        function getMouse(mousePosition) {
+    	mouseX = mousePosition.layerX;
+    	mouseY = mousePosition.layerY;
+        }
+        
+var mouseX=1;
+var mouseY=1;
+
+var fov = 1000;
+
+var point = [];
+var point3d = [];
+var angleX = 0;
+var angleY = 0;
+var angleZ = 0;   
+      
+var angleXIncrease = 0;
+var angleYIncrease = 0;      
+      
+      
+var HALF_WIDTH = width / 2;
+var HALF_HEIGHT = height / 2;
+
+var x3d = 0;
+var y3d = 0;
+var z3d = 0;
+
+var firstx2d=0;
+var firsty2d=0;
+var firstScale=0;
+var lastScale = 0;
+var lastx2d = 0;
+var lasty2d = 0;
+
+var elements = 300;
+var x, y = 0;
+var lastX, lastY = 0;
+var firstX, firstY = 0;
+var r1, r2 = 0;
+
+var m = 0;
+var n1 = 0;
+var n2 = 0;
+var n3 = 0;
+var b = 1;
+var a = 1;
+
+// creates a sphere of points
+var dim = 200; // number of rings
+var spacing = ((Math.PI * 2) / dim);
+// total number of points
+var numPoints = dim*dim;
+var size = 7.4;
+var counter=0;
+        
+function draw() {
+    
+ //counter++;    
+var mouseX1=mouseX/200;
+var mouseY1=mouseY/200;
+//m control the changing shape
+m = Math.floor((mouseY / height) * 10);
+m2 = Math.floor((mouseY / height) * 10)/10;
+n1 = (mouseX / width) * 10;
+
+var points = [];
+    // build the sphere geometry
+for (var i = 0; i < dim; i++) {
+    //Use r to calculate x and y  
+    var z = size * Math.sin(spacing / 2 * i) * (dim/8);
+// Calculate the size of the current ring    
+    var s = size * Math.atan(spacing / 2 * i);
+// For each ring       
+    for (var j = 0; j < dim; j++ ) {
+// superformula!
+      m=6;
+      n1=0.3;
+      n2=1.2;
+      n3=5;
+            
+r1 = size * Math.pow(Math.pow(Math.abs(Math.cos((m * spacing * j) / 4) / a), n2) + Math.pow(Math.abs(Math.sin((m * spacing * j) / 4)) / b, n3), -(1 / n1))*3;
+var point = [r1 * Math.cos(spacing * j) * s,r1 * Math.sin(spacing * j)*s,z];
+    points.push(point);
+}
+}
+
+    context.fillStyle = "rgb(0,0,0)";
+    context.fillRect(0, 0, width, height);
+    
+//Rotational angle
+//Rotate around the mouse 
+    angleXIncrease+=0.002;
+    angleYIncrease+=0.002;
+
+  
+  	angleX = HALF_WIDTH+mouseX1+angleXIncrease;
+  	angleY = HALF_HEIGHT+100-mouseY1+angleYIncrease;
+
+// run through each ring and work out where it should be drawn
+console.log("mouseX: "+mouseX+"  mouseY: "+mouseY);
+parent.postMessage(["console",JSON.stringify("mouseX: "+mouseX+"  mouseY: "+mouseY)], "*");
+    for (let i = 0; i < numPoints; i+=dim) {
+
+        for (let j = 0; j <dim; j++ ) {
+        point3d = points[Math.floor(i+j)];
+        z3d = point3d[2];
+          
+// Check that the points aren't disappearing into space and if so push them back
+// This also stops them stretching
+// When they get too close
+        if (z3d < -fov) z3d += 0;
+        
+        point3d[2] = z3d;
+ 
+ // Calculate the rotation
+ //Rotate around the mouse
+     	rotateX(point3d,angleX);
+    	rotateY(point3d,angleY);
+         
+ // Get the point in position 
+        x3d = point3d[0];
+        y3d = point3d[1];
+        z3d = point3d[2];
+// Convert the Z value to a scale factor
+// This will give the appearance of depth
+        var scale = (fov / (fov + z3d));
+          
+// Store the X value with the scaling
+// FOV is taken into account
+// (just pushing it over to the left a bit too)
+//Translation and scale here
+        var x2d = (x3d * scale) + HALF_WIDTH;
+
+// Store the Y value with the scaling
+// FOV is taken into account
+        var y2d = (y3d * scale) + HALF_HEIGHT;
+
+// // If our main loop is going to join all the points together in a line, we need to store the first points and use them at the end.     
+        if (j===0){
+            
+            firstx2d=x2d;
+            firsty2d=y2d;
+            firstScale=scale;           
+           
+            lastx2d=x2d;
+            lasty2d=y2d;
+            lastScale=scale;           
+    
+        }
+        
+// Draw the point
+
+// Set the size based on scaling
+        context.lineWidth = scale/2 + 0.16;
+
+// Style the stroke gradient
+    var gradient=context.createLinearGradient(300,500,600,800);
+	gradient.addColorStop("0","#757BC8");
+    gradient.addColorStop("0.18","#bbd0ff");
+	gradient.addColorStop("0.6","#E0C3FC");
+	gradient.addColorStop("1.0","#9381ff");
+    context.strokeStyle = gradient;
+          
+        context.beginPath();
+        context.moveTo(lastx2d + lastScale, lasty2d);
+        context.lineTo(x2d + scale, y2d);
+        context.stroke();
+
+// Store the last point so we can join it to the next one.
+        lastx2d=x2d;
+        lasty2d=y2d;
+        lastScale=scale;
+
+// if it's the end of the current ring, join it to the first
+          
+        if (j==dim-1) {
+            
+        context.lineWidth = scale;
+
+        //context.strokeStyle = "rgb(255,255,255)";
+        context.beginPath();
+        context.moveTo(lastx2d + lastScale, lasty2d);
+        context.lineTo(firstx2d + firstScale, firsty2d);
+        context.stroke();                       
+        }
+     }
+    }
+}
+
+setInterval(draw, 50);
+
+function rotateX(point3d,angleX) {
+        var	x = point3d[0]; 
+        var	z = point3d[2]; 
+	
+        var	cosRY = Math.atan(angleX);
+        var	sinRY = Math.cos(angleX);
+        
+        var	tempz = z; 
+        var	tempx = x;
+
+        x= (tempx*cosRY)+(tempz*sinRY);
+        z= (tempx*-sinRY)+(tempz*cosRY);
+
+        point3d[0] = 2*x;
+        point3d[2] = z;
+          
+}
+
+function rotateY(point3d,angleY) {
+        var y = point3d[1];
+        var	z = point3d[2]; 
+	
+        var cosRX = Math.cos(angleY);
+        var sinRX = Math.sin(angleY);
+        
+        var	tempz = z; 
+        var	tempy = y;
+
+        y= (tempy*cosRX)+(tempz*sinRX);
+        z= (tempy*-sinRX)+(tempz*cosRX);
+
+        point3d[1] = 1.2*y;
+        point3d[2] = z;
+          
+} 
+      
+      
+function rotateZ(point3d,angleZ) {
+        var x = point3d[0];
+        var	y = point3d[1]; 
+	
+        var cosRZ = Math.cos(angleZ);
+        var sinRZ = Math.sin(angleZ);
+        
+        var	tempx = x; 
+        var	tempy = y;
+
+        x= (tempx*cosRZ)-(tempy*sinRZ);
+        y= (tempx*sinRZ)+(tempy*cosRZ);
+
+        point3d[0] = x;
+        point3d[1] = y;
+          
+} 
+
+//here's our function 'getMouse'.
+function getMouse (mousePosition) {
+//for other browsers..
+    mouseX = mousePosition.layerX;
+    mouseY = mousePosition.layerY;
+}
+  
+// bring in some music...
+	var mouseX1=mouseX;
+   	var mouseY1=mouseY/9;
+   	var changeThis = 9;
+   	var maximJs = maximilian();
+   	var maxiAudio = new maximJs.maxiAudio();
+      
+   	maxiAudio.init();
+    var osc = new maximJs.maxiOsc();
+    var osc2 = new maximJs.maxiOsc();
+    var osc3 = new maximJs.maxiOsc();
+    var drawOutput = new Array(1024);
+    var counter = 0;
+	var bufferFreq=44100/1024;
+
+	maxiAudio.play = function() {
+
+    var wave = osc.sinewave(bufferFreq+osc2.sinewave(bufferFreq*changeThis*mouseY1+mouseX1-0.1)*osc3.sinewave(n1/10)*700);
+    counter++;
+      
+    drawOutput[counter % 1024] = wave;
+    return wave * 0.03;
+      
+};
+        
+</script>
+  
+  <script>
+// Next is the three.js part!
+// First we need to set up some objects and initialise them.
+// Three.js provides a canvas automatically so we don't need that. 
+// This creates a camera. It has a field of view, a size, a near clipping plane and a far clipping plane      
+	//var fov = 100;
+    //var aspect = 2;     
+    var camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 3000); 
+   camera.position.set(0,8,30);
+// create a scene and add things to it.   
+	var scene = new THREE.Scene();
+    //scene.background = new THREE.Color("#231942");
+    // I added fog in the scene to create some dreamy feel.
+    scene.fog = new THREE.Fog("#4c2c69", 17, 0.1);
+    
+    // load in textures
+	var myTextureLoader = new THREE.TextureLoader();
+    
+    	let icebase = new THREE.TextureLoader().load( 'Diffuse.jpg');
+    	let icebase1 = new THREE.TextureLoader().load( 'base1.jpg');
+    	let icebase2 = new THREE.TextureLoader().load( 'base2.jpg');
+    	let icenormal = new THREE.TextureLoader().load( 'Normal.jpg');
+    	let snownormal = new THREE.TextureLoader().load( 'snownormal.jpg');
+        let icedisplacement = new THREE.TextureLoader().load( 'Displacement.png');
+        let iceocclusion = new THREE.TextureLoader().load( 'Occlusion.jpg');
+        let icespecularity = new THREE.TextureLoader().load( 'Specularity.jpg');
+   
+// create geometry
+var bubble1 = new THREE.Mesh(new THREE.SphereGeometry(5, 20, 10), new THREE.MeshStandardMaterial({ map: icebase1, normalMap: icenormal, roughnessMap: icespecularity, roughness: 0.01,transparent: true, opacity: 0.8}));
+bubble1.rotation.x = - Math.PI / 2 ;
+bubble1.position.y = 5;
+bubble1.position.x = -18;
+bubble1.position.z = 10;
+scene.add(bubble1);
+    
+var bubble2 = new THREE.Mesh(new THREE.SphereGeometry(5, 50, 10), new THREE.MeshStandardMaterial({ map: icebase2, normalMap: snownormal, roughnessMap: icespecularity, roughness: 0.01,transparent: true, opacity: 0.8}));
+bubble2.rotation.x += 0.1 ;
+bubble2.rotation.y += -2 ;
+bubble2.position.y = -0.5;
+bubble2.position.x = 15;
+bubble2.position.z = 5;
+scene.add(bubble2);
+    
+
+var geometry = new THREE.CylinderGeometry(6,5,8,18,0.5);
+//var geometry = new THREE.IcosahedronGeometry(5, 10);
+geometry.computeVertexNormals();
+ 
+var material = new THREE.MeshPhongMaterial({ map: icebase, normalMap: icenormal, displacementMap: icedisplacement, displacementScale: 2, roughnessMap: icespecularity, roughness: 0.01, aoMap: iceocclusion });
+
+var mesh = new THREE.Mesh(geometry, material);
+mesh.receiveShadow = true; 
+// push it a little bit at the bottom of the scene
+mesh.position.set(0,0,25);
+scene.add(mesh);
+
+// add some lighting      
+	const dirlight1 = new THREE.DirectionalLight("#ffeef2",2);
+    dirlight1.position.set( -9,8,-4 );
+    scene.add( dirlight1 );
+    dirlight1.target = mesh;
+    
+    const dirlight2 = new THREE.DirectionalLight("#b388eb",3);
+    dirlight2.position.set( 9,-9,1 );
+    scene.add( dirlight2 );
+    dirlight2.target = mesh;
+    
+    const light = new THREE.PointLight( 0xffffff, 0.08);    
+light.position.set( 10,10,5 );
+    scene.add( light );
+    
+    const sphere =new THREE.SphereGeometry( 0.01, 3, 4 );
+    
+    light1 = new THREE.PointLight( "#c8e7ff", 5, 26 );
+	light1.add( new THREE.Mesh( sphere, new THREE.MeshBasicMaterial( { color: "#c8e7ff" } ) ) );
+	scene.add( light1 );
+
+	light2 = new THREE.PointLight( 0x0040ff, 4, 8 );
+	light2.add( new THREE.Mesh( sphere, new THREE.MeshBasicMaterial( { color: 0x0040ff } ) ) );
+	scene.add( light2 );
+
+	light3 = new THREE.PointLight( "#9d4edd", 2, 26 );
+	light3.add( new THREE.Mesh( sphere, new THREE.MeshBasicMaterial( { color: "#9d4edd" } ) ) );
+	scene.add( light3 );
+
+	light4 = new THREE.PointLight( 0xffaa00, 2, 6 );
+	light4.add( new THREE.Mesh( sphere, new THREE.MeshBasicMaterial( { color: 0xffaa00 } ) ) );
+	scene.add( light4 );
+    
+// Now we can create our renderer. This renders the scene.      
+	var renderer = new THREE.WebGLRenderer({
+      alpha: true,
+      antialias:true
+    });
+    renderer.shadowMap.enabled = true;
+      
+// This is to make sure that the scene understands the resolution of the device we are on.
+	renderer.setPixelRatio(window.devicePixelRatio);
+// We can also set the size of the render window
+	renderer.setSize(window.innerWidth, window.innerHeight);
+// Finally we want to connect the renderer to the HTML document
+	document.body.appendChild(renderer.domElement);
+// And make sure that when the page is resized, everything gets updated 
+	window.addEventListener('resize', onWindowResize, false); 
+    
+// Set the Orbit Control to limit it above the ground level.    
+var controls = new THREE.OrbitControls (camera, renderer.domElement);
+controls.minDistance = 2;
+controls.maxDistance = 30;
+controls.minPolarAngle = 0; // radians
+//controls.maxPolarAngle = Math.PI/2; // radians
+var centerPosition = controls.target.clone();
+centerPosition.y = 0;
+var groundPosition = camera.position.clone();
+groundPosition.y = 8;
+var d = (centerPosition.distanceTo(groundPosition));
+
+var origin = new THREE.Vector2(controls.target.y,0);
+var remote = new THREE.Vector2(8,d); // replace 0 with raycasted ground altitude
+var angleRadians = Math.atan2(remote.y - origin.y, remote.x - origin.x);
+controls.maxPolarAngle = angleRadians;
+controls.enableDamping = true;
+controls.maxAzimuthAngle = 3.14/4;
+//controls.maxAzimuthAngle = Math.PI/4;  
+//controls.minAzimuthAngle = - Math.PI/4;
+    
+//  Now we can have a draw loop.    
+function draw() {
+    mesh.position.y = 0;
+ 	mesh.rotation.x += 0;
+  	//mesh.position.x += -0.005;
+	mesh.rotation.y+= 0.005;
+  //camera.position.x += 0.01;
+    controls.update();
+	renderer.render(scene, camera);
+	requestAnimationFrame(draw);
+}
+
+// This is the thing that does the resizing      
+function onWindowResize() {
+	camera.aspect = window.innerWidth / 		window.innerHeight;
+	camera.updateProjectionMatrix();
+	renderer.setSize(window.innerWidth, window.innerHeight);
+}    
+
+    	
+// Finally, call the draw loop.      
+requestAnimationFrame(draw());
+    
+// All done! Welcome to my Stellar Wild ^^
+
+</script>
+  
+  
+</body>
+
+</html>
